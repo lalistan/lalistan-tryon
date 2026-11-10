@@ -31,7 +31,7 @@ main{flex:1;display:flex;flex-direction:column;max-width:560px;width:100%;margin
 
 /* stage */
 .stage{position:relative;background:var(--ink);aspect-ratio:3/4;width:100%;overflow:hidden}
-.stage canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:var(--ink)}
+.stage canvas{pointer-events:none;position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:var(--ink)}
 .stage .badge{position:absolute;left:12px;top:12px;background:rgba(31,26,23,.62);color:var(--cream);font-size:12px;padding:6px 10px;border-radius:999px;display:none}
 .stage .badge.on{display:block}
 .cmp{position:absolute;right:12px;top:12px;background:rgba(31,26,23,.62);color:var(--cream);font-size:12px;font-weight:600;padding:7px 12px;border-radius:999px;z-index:2}
@@ -61,7 +61,7 @@ main{flex:1;display:flex;flex-direction:column;max-width:560px;width:100%;margin
 /* panel */
 .panel{background:var(--cream);padding:12px 0 6px}
 .tabs{display:flex;margin:0 16px;border:1px solid var(--line);border-radius:999px;overflow:hidden}
-.tabs button{flex:1;padding:10px 4px;font-size:12px;font-weight:600;letter-spacing:.16em;color:var(--pom)}
+.tabs button{flex:1;padding:10px 2px;font-size:11px;font-weight:600;letter-spacing:.1em;color:var(--pom)}
 .tabs button[aria-selected=true]{background:var(--pom);color:var(--cream)}
 .row{display:flex;gap:12px;overflow-x:auto;padding:14px 16px 6px;scrollbar-width:none}
 .row::-webkit-scrollbar{display:none}
@@ -123,6 +123,7 @@ input[type=range]::-moz-range-thumb{width:18px;height:18px;border-radius:50%;bac
 <main>
   <div class="stage pre" id="stage">
     <canvas id="view"></canvas>
+    <canvas id="ov"></canvas>
     <div class="badge" id="badge">იტვირთება…</div>
     <div class="hint" id="hint"></div>
     <button class="cmp" id="btnCmp" aria-pressed="false">ადრე | ახლა</button>
@@ -148,6 +149,7 @@ input[type=range]::-moz-range-thumb{width:18px;height:18px;border-radius:50%;bac
     <div class="tabs" role="tablist">
       <button role="tab" aria-selected="true" data-tab="color">ᲤᲔᲠᲘ</button>
       <button role="tab" aria-selected="false" data-tab="tech">ᲢᲔᲥᲜᲘᲙᲐ</button>
+      <button role="tab" aria-selected="false" data-tab="style">ᲕᲐᲠᲪᲮᲜᲘᲚᲝᲑᲐ</button>
     </div>
 
     <div id="tabColor">
@@ -158,7 +160,15 @@ input[type=range]::-moz-range-thumb{width:18px;height:18px;border-radius:50%;bac
       <div class="row" id="techs"></div>
     </div>
 
-    <div class="sliders">
+    <div id="tabStyle" hidden>
+      <div class="row" id="styles"></div>
+      <div class="sliders" id="styleSliders" hidden>
+        <label class="sl">ზომა <input type="range" id="scale" min="0.88" max="1.18" step="0.01" value="1"></label>
+        <label class="sl">სიმაღლე <input type="range" id="lift" min="-0.25" max="0.25" step="0.01" value="0"></label>
+      </div>
+    </div>
+
+    <div class="sliders" id="colorSliders">
       <label class="sl">ინტენსივობა <input type="range" id="strength" min="0.2" max="1" step="0.01" value="0.8"></label>
       <label class="sl">ცივი · თბილი <input type="range" id="warm" min="-1" max="1" step="0.01" value="0"></label>
     </div>
@@ -237,6 +247,7 @@ const TECHS = [
 
 const S = {
   color: COLORS[0], customHex:"#8A3B2E", strength:.8, warm:0, tech:0, split:-1,
+  style: null, scale:1, lift:0, light:1,
   facing:"user", stream:null, source:null, mirror:true,
   segmenter:null, face:null,
   W:0, H:0, lastTs:0, frame:0,
@@ -244,7 +255,7 @@ const S = {
 };
 
 const $ = id => document.getElementById(id);
-const view = $("view");
+const view = $("view"), ov = $("ov"), octx = ov.getContext("2d");
 const video = document.createElement("video");
 video.playsInline = true; video.muted = true; video.setAttribute("playsinline","");
 const work = document.createElement("canvas"), wctx = work.getContext("2d", {willReadFrequently:true});
@@ -364,6 +375,267 @@ function render(){
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 }
 
+/* ---------------- hairstyles: strand-rendered textures ----------------
+   Local face frame: x = ±1 at the face edge, y down, origin midway forehead–chin.
+   Textures are built once per style + shade in a canonical frame (forehead -1.3, chin +1.3)
+   and drawn every frame with the face transform. */
+const STYLES = [
+  {id:"none", name:"ჩემი თმა"},
+  {id:"bob", name:"კარე", vol:.44, wTop:1.13, wBot:1.2, len:1.35},
+  {id:"bobBangs", name:"კარე ჩოლკით", vol:.44, wTop:1.13, wBot:1.2, len:1.35, bangs:true},
+  {id:"lob", name:"მხრებამდე", vol:.46, wTop:1.13, wBot:1.34, len:2.2},
+  {id:"long", name:"გრძელი სწორი", vol:.46, wTop:1.13, wBot:1.38, len:3.0},
+  {id:"wavy", name:"გრძელი ტალღოვანი", vol:.56, wTop:1.2, wBot:1.55, len:2.8, wave:.09},
+  {id:"curtain", name:"გრძელი ჩოლკით", vol:.46, wTop:1.13, wBot:1.38, len:2.9, bangs:"curtain"},
+  {id:"pixie", name:"მოკლე", vol:.4, wTop:1.06, wBot:1.04, len:-.35, sweep:true},
+  {id:"bun", name:"ფუნთუშა", vol:.32, wTop:1.03, wBot:1.02, len:-.6, bun:true},
+  {id:"men", name:"მამაკაცის მოკლე", vol:.34, wTop:1.04, wBot:1.03, len:-.85, crop:true},
+];
+const CAN = {fy:-1.3, cy:1.3};
+const TX = {x0:-2.1, x1:2.1, y0:-2.6, y1:3.6, ppu:120};
+const texCache = new Map();
+
+function rng(seed){ let s=seed>>>0; return ()=>((s=(s*1664525+1013904223)>>>0)/4294967296); }
+const clamp255 = v => v<0?0:v>255?255:v|0;
+function shade(rgb, k, warm=0){ return [clamp255(rgb[0]*k*(1+warm*.06)), clamp255(rgb[1]*k), clamp255(rgb[2]*k*(1-warm*.08))]; }
+const css = (c,a) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
+
+// colour of a strand at position t (0 root → 1 tip) for the chosen technique
+function strandColor(base, nat, tech, t, r){
+  if(tech===1){ const k = Math.min(1, Math.max(0, (t-.3)/.45)); return base.map((v,i)=>nat[i]+(v-nat[i])*k); }
+  if(tech===2){ return r < .38 ? base.map((v,i)=>nat[i]+(v-nat[i])*Math.min(1,Math.max(0,(t-.15)/.4))) : nat; }
+  if(tech===3){ const k = Math.min(1, Math.max(0, (t-.06)/.28)); const root = nat.map(v=>v*.8); return base.map((v,i)=>root[i]+(v-root[i])*k); }
+  return base;
+}
+
+function buildHairTexture(st, hex, tech, quality=1){
+  const key = st.id+"|"+hex+"|"+tech+"|"+quality;
+  if(texCache.has(key)) return texCache.get(key);
+  const ppu = TX.ppu*quality;
+  const W = Math.round((TX.x1-TX.x0)*ppu), H = Math.round((TX.y1-TX.y0)*ppu);
+  const cv = document.createElement("canvas"); cv.width=W; cv.height=H;
+  const g = cv.getContext("2d");
+  g.setTransform(ppu,0,0,ppu,-TX.x0*ppu,-TX.y0*ppu);
+  g.lineCap = "round"; g.lineJoin = "round";
+  const base = hexRgb(hex), nat = hexRgb("#3A281D");
+  const R = rng(st.id.length*7919 + 31);
+  const fy = CAN.fy, cy = CAN.cy, T = fy - st.vol, px = st.sweep ? .35 : (st.crop ? 0 : -.18);
+  const yB = cy + st.len, lw = 1/ppu;
+
+  // 1. dark under-layer so no gaps show between strands
+  const under = new Path2D();
+  under.moveTo(-st.wTop*.96, T+.62);
+  under.ellipse(0, T+.62, st.wTop*.96, .6, 0, Math.PI, Math.PI*2);
+  under.quadraticCurveTo(st.wTop*.9, T+.95, 0, T+.9); under.quadraticCurveTo(-st.wTop*.9, T+.95, -st.wTop*.96, T+.62);
+  under.closePath();
+  g.fillStyle = css(shade(strandColor(base,nat,tech,.4,1),.5), .85); g.fill(under);
+
+  // 2. strands: parting → over the crown → down the side → tapered tip
+  const n = Math.round((st.len>0 ? 2600 : 1700)*quality);
+  const strands = [];
+  for(let i=0;i<n;i++){
+    const side = R()<.5 ? -1 : 1;
+    const u = Math.pow(R(), .7);                 // 0 = near parting, 1 = outer side
+    const sx = side*(st.wTop - (1-u)*.32 - R()*.06);
+    const sy = T + .4 + u*.25 + R()*.08;
+    const k = .45 + Math.pow(R(), .8)*.95;       // brightness of this strand: real hair varies a lot
+    strands.push({side, u, sx, sy, k, a:.75+R()*.25, w:(.7+R()*1.2)*lw, r:R(), j1:R(), j2:R(), j3:R()});
+  }
+  for(const s of strands){
+    const x0 = px + (R()-.5)*.12, y0 = T + .02 + R()*.04;
+    const cx = (x0 + s.sx)/2 + s.side*.18, cyy = T - .06 + s.j1*.08;
+    let ex, ey;
+    if(st.len > 0){
+      ey = yB - s.j2*.5 - (s.u<.35 ? .3 : 0);
+      ex = s.side*(st.wBot - (1-s.u)*.35) + (s.j3-.5)*.08;
+    } else {
+      ey = s.sy + (-st.len>.7 ? .15 : .45) + s.j2*.15;
+      ex = s.sx*1.01 + (s.j3-.5)*.05;
+    }
+    const pts = [];
+    // crown arc (quadratic) then fall (with optional wave)
+    for(let q=0;q<=6;q++){ const t=q/6, it=1-t; pts.push([it*it*x0+2*it*t*cx+t*t*s.sx, it*it*y0+2*it*t*cyy+t*t*s.sy]); }
+    const m = 14;
+    for(let q=1;q<=m;q++){
+      const t=q/m; let x = s.sx + (ex-s.sx)*Math.pow(t,1.15), y = s.sy + (ey-s.sy)*t;
+      if(st.wave) x += Math.sin(t*Math.PI*4.2 + s.j1*1.2)*st.wave*Math.min(1,t*2.5)*s.side;
+      pts.push([x,y]);
+    }
+    // runs: root, shine band on the crown, length, tapered tip
+    const last = pts.length-1;
+    const runs = [[0,3,.0,1],[3,7,.1,1.5],[7,9,.25,1.12],[9,16,.45,1],[16,last-3,.75,.92],[last-3,last,.95,.9]];
+    for(const [a,b,t,boost] of runs){
+      const c = shade(strandColor(base,nat,tech,t+.05,s.r), s.k*boost, 0);
+      const tip = t > .9;
+      g.strokeStyle = css(c, tip ? s.a*.4 : s.a);
+      g.lineWidth = tip ? s.w*.55 : s.w;
+      g.beginPath(); g.moveTo(pts[a][0],pts[a][1]);
+      for(let q=a+1;q<=b;q++) g.lineTo(pts[q][0],pts[q][1]);
+      g.stroke();
+    }
+  }
+
+  // 2b. front of the crown: strands fanning from the parting to the hairline
+  const nf = Math.round((st.bun ? 1100 : 1500)*quality);
+  const fan = [];
+  for(let i=0;i<nf;i++){
+    const a = Math.PI + .08 + R()*(Math.PI - .16);
+    fan.push({a, k:.45 + Math.pow(R(), .8)*.95, al:.75+R()*.25, w:(.7+R()*1.2)*lw, r:R(), j:R()});
+  }
+  for(const f of fan){
+    const hx = Math.cos(f.a)*.97 + (st.sweep ? .12 : 0);
+    const hy = fy + .04 + (1 - Math.abs(Math.sin(f.a)))*.62 + f.j*.05;
+    const x0 = (st.bun ? 0 : px) + (R()-.5)*.14, y0 = (st.bun ? T-.05 : T+.03);
+    const cx = (x0+hx)/2 + Math.cos(f.a)*.22, cyy = Math.min(y0, hy) - .02 + (hy-y0)*.25;
+    const pts = [];
+    for(let q=0;q<=8;q++){ const t=q/8, it=1-t; pts.push([it*it*x0+2*it*t*cx+t*t*hx, it*it*y0+2*it*t*cyy+t*t*hy]); }
+    const runs = [[0,2,1],[2,4,1.45],[4,6,1.1],[6,8,.95]];
+    for(const [p0,p1,boost] of runs){
+      const c = shade(strandColor(base,nat,tech,.08+p0/40,f.r), f.k*boost);
+      g.strokeStyle = css(c, f.al); g.lineWidth = f.w;
+      g.beginPath(); g.moveTo(pts[p0][0],pts[p0][1]); for(let q=p0+1;q<=p1;q++) g.lineTo(pts[q][0],pts[q][1]); g.stroke();
+    }
+  }
+
+  // 3. bun: coiled strands on the crown
+  if(st.bun){
+    const bx=0, by=T-.22, br=.48;
+    g.fillStyle = css(shade(base,.5),1); g.beginPath(); g.arc(bx,by,br,0,7); g.fill();
+    for(let i=0;i<700*quality;i++){
+      const r0 = br*Math.sqrt(R()), a0 = R()*7, len = .5+R()*1.1, k=.45+Math.pow(R(),.8)*.95;
+      g.strokeStyle = css(shade(strandColor(base,nat,tech,.5,1),k), .5+R()*.4); g.lineWidth=(1+R()*1.5)*lw;
+      g.beginPath(); g.arc(bx,by,Math.max(.03,r0),a0,a0+len); g.stroke();
+    }
+  }
+
+  // 4. light: soft highlight band across the crown, depth toward the ends
+  g.globalCompositeOperation = "source-atop";
+  const dp = g.createLinearGradient(0, T, 0, Math.max(yB, T+1.4));
+  dp.addColorStop(0, "rgba(0,0,0,0)"); dp.addColorStop(.6, "rgba(0,0,0,.04)"); dp.addColorStop(1, "rgba(0,0,0,.22)");
+  g.fillStyle = dp; g.fillRect(TX.x0, TX.y0, TX.x1-TX.x0, TX.y1-TX.y0);
+  // shadow where hair hangs beside the cheeks
+  for(const sd of [-1,1]){
+    const ao = g.createLinearGradient(sd*.85, 0, sd*1.3, 0);
+    ao.addColorStop(0, "rgba(0,0,0,.28)"); ao.addColorStop(1, "rgba(0,0,0,0)");
+    g.fillStyle = ao; g.fillRect(sd>0?.85:-1.3, fy+.3, .45, 6);
+  }
+  g.globalCompositeOperation = "source-over";
+
+  // 5. a few flyaways on the outline
+  for(let i=0;i<40*quality;i++){
+    const side = R()<.5?-1:1, y = T+.3+R()*Math.max(.6, yB-T-.5);
+    const x = side*(st.wTop + .02 + R()*.06);
+    g.strokeStyle = css(shade(base,.9+R()*.4), .22); g.lineWidth = lw*.9;
+    g.beginPath(); g.moveTo(x - side*.05, y); g.quadraticCurveTo(x + side*(.05+R()*.08), y+.12, x+side*(.02+R()*.08), y+.3+R()*.2); g.stroke();
+  }
+
+  const front = st.bangs ? buildBangs(st, base, nat, tech, R, ppu) : (st.sweep ? buildSweep(st, base, nat, tech, R, ppu) : null);
+  const out = {back:cv, front};
+  texCache.set(key, out);
+  if(texCache.size > 24) texCache.delete(texCache.keys().next().value);
+  return out;
+}
+function frontCanvas(ppu){
+  const W = Math.round((TX.x1-TX.x0)*ppu), H = Math.round((TX.y1-TX.y0)*ppu);
+  const cv = document.createElement("canvas"); cv.width=W; cv.height=H;
+  const g = cv.getContext("2d"); g.setTransform(ppu,0,0,ppu,-TX.x0*ppu,-TX.y0*ppu); g.lineCap="round";
+  return [cv,g];
+}
+function buildBangs(st, base, nat, tech, R, ppu){
+  const [cv,g] = frontCanvas(ppu), fy = CAN.fy, T = fy - st.vol, lw = 1/ppu;
+  const curtain = st.bangs === "curtain";
+  const n = 900;
+  const arr = [];
+  for(let i=0;i<n;i++) arr.push({x:(R()*2-1)*.98, k:.62+R()*.6, a:.55+R()*.4, w:(1+R()*1.6)*lw, j:R()});
+  arr.sort((a,b)=>a.k-b.k);
+  for(const s of arr){
+    const x0 = s.x*.35 + (R()-.5)*.1, y0 = T+.12;
+    let ex = s.x*1.02, ey = fy + .42 - s.j*.1;
+    if(curtain){ // parted in the middle, longer toward the cheekbones
+      ex = s.x*1.05 + Math.sign(s.x||1)*.12; ey = fy + .25 + Math.abs(s.x)*.75 - s.j*.1;
+      if(Math.abs(s.x) < .25) continue;
+    }
+    const cx = (x0+ex)/2 + s.x*.15, cy = T + .05;
+    const c = shade(strandColor(base,nat,tech,.3,s.j), s.k);
+    g.strokeStyle = css(c, s.a); g.lineWidth = s.w;
+    g.beginPath(); g.moveTo(x0,y0); g.quadraticCurveTo(cx,cy,ex*.98+(ex-x0)*-.02, ey-.08); g.stroke();
+    g.strokeStyle = css(c, s.a*.5); g.lineWidth = s.w*.6;
+    g.beginPath(); g.moveTo(ex*.98, ey-.09); g.lineTo(ex, ey); g.stroke();
+  }
+  g.globalCompositeOperation="source-atop";
+  const hl = g.createLinearGradient(0, T, 0, fy+.5);
+  hl.addColorStop(0,"rgba(0,0,0,0)"); hl.addColorStop(.45,"rgba(255,240,220,.16)"); hl.addColorStop(1,"rgba(0,0,0,.18)");
+  g.fillStyle=hl; g.fillRect(-2,-3,4,4);
+  return cv;
+}
+function buildSweep(st, base, nat, tech, R, ppu){
+  const [cv,g] = frontCanvas(ppu), fy = CAN.fy, T = fy - st.vol, lw = 1/ppu;
+  for(let i=0;i<900;i++){
+    const t = R(), x0 = -.55 + t*.9 + (R()-.5)*.1, y0 = T + .12 + R()*.1;
+    const ex = x0 + .35 + R()*.15, ey = fy + .02 + t*.28 + R()*.05;
+    const c = shade(strandColor(base,nat,tech,.4,R()), .45+Math.pow(R(),.8)*.95);
+    g.strokeStyle = css(c, .75+R()*.25); g.lineWidth = (.7+R()*1.1)*lw;
+    g.beginPath(); g.moveTo(x0,y0); g.quadraticCurveTo((x0+ex)/2, y0-.08, ex, ey); g.stroke();
+  }
+  return cv;
+}
+
+/* draw onto the overlay canvas in screen space */
+function drawHairstyle(ctx, st, pose, hex, tech, light){
+  const tex = buildHairTexture(st, hex, tech);
+  const s = pose.s*S.scale, cos=Math.cos(pose.ang), sin=Math.sin(pose.ang);
+  const sy = (pose.cy - pose.fy) / (CAN.cy - CAN.fy);   // this face's height vs the canonical one
+  const setT = () => { ctx.setTransform(s*cos, s*sin, -s*sin, s*cos, pose.c[0], pose.c[1]); ctx.translate(0, -S.lift); ctx.scale(1, sy); };
+
+  // soft contact shadow under the hairline, on the skin
+  ctx.save();
+  const oval = new Path2D(); pose.oval.forEach((q,i)=> i?oval.lineTo(q[0],q[1]):oval.moveTo(q[0],q[1])); oval.closePath();
+  ctx.clip(oval);
+  setT();
+  const top = st.bangs===true ? CAN.fy+.38 : CAN.fy-.05;
+  const sh = ctx.createLinearGradient(0, top, 0, top+.42);
+  sh.addColorStop(0, "rgba(30,15,8,.32)"); sh.addColorStop(1, "rgba(30,15,8,0)");
+  ctx.fillStyle = sh; ctx.fillRect(-1.5, top-.2, 3, .65);
+  ctx.restore();
+
+  // back layer: everything except the face
+  ctx.save();
+  const clip = new Path2D(); clip.rect(0,0,S.W,S.H);
+  const k=.97; pose.oval.forEach((q,i)=>{ const x=pose.c[0]+(q[0]-pose.c[0])*k, y=pose.c[1]+(q[1]-pose.c[1])*k; i?clip.lineTo(x,y):clip.moveTo(x,y); }); clip.closePath();
+  ctx.clip(clip, "evenodd");
+  setT();
+  ctx.drawImage(tex.back, TX.x0, TX.y0, TX.x1-TX.x0, TX.y1-TX.y0);
+  ctx.restore();
+
+  if(tex.front){
+    ctx.save(); setT();
+    ctx.drawImage(tex.front, TX.x0, TX.y0, TX.x1-TX.x0, TX.y1-TX.y0);
+    ctx.restore();
+  }
+  // match the room light: darker scenes darken the hair too
+  if(light < .97){
+    ctx.save(); ctx.globalCompositeOperation = "source-atop";
+    ctx.fillStyle = `rgba(0,0,0,${Math.min(.45, (1-light)*.8)})`; ctx.fillRect(0,0,S.W,S.H);
+    ctx.restore();
+  }
+}
+
+/* style thumbnails: the real texture on a little head */
+function drawStyleThumb(cv, st){
+  const d = 2, c = cv.getContext("2d"); cv.width = 64*d; cv.height = 64*d;
+  c.fillStyle = "#EFE3CF"; c.fillRect(0,0,cv.width,cv.height);
+  const k = d*12.5;
+  c.setTransform(k,0,0,k,32*d,30*d);
+  c.fillStyle = "#E3C2A6"; c.beginPath(); c.ellipse(0,0,1,1.3,0,0,7); c.fill(); c.fillRect(-.5,1,1,2);
+  if(st.id === "none"){ c.strokeStyle="#7A1E22"; c.lineWidth=.08; c.beginPath(); c.ellipse(0,0,1,1.3,0,0,7); c.stroke(); return; }
+  const tex = buildHairTexture(st, "#3B2418", 0, .35);
+  c.save();
+  const clip = new Path2D(); clip.rect(-5,-5,10,10); clip.ellipse(0,0,.97,1.27,0,0,7); c.clip(clip,"evenodd");
+  c.drawImage(tex.back, TX.x0, TX.y0, TX.x1-TX.x0, TX.y1-TX.y0);
+  c.restore();
+  if(tex.front) c.drawImage(tex.front, TX.x0, TX.y0, TX.x1-TX.x0, TX.y1-TX.y0);
+}
+
 /* ---------------- UI ---------------- */
 function buildUI(){
   const cw = $("colors");
@@ -395,9 +667,26 @@ function buildUI(){
   paintTechs();
   document.querySelectorAll(".tabs button").forEach(t=>t.addEventListener("click",()=>{
     document.querySelectorAll(".tabs button").forEach(x=>x.setAttribute("aria-selected", x===t));
-    $("tabColor").hidden = t.dataset.tab!=="color"; $("tabTech").hidden = t.dataset.tab!=="tech";
+    $("tabColor").hidden = t.dataset.tab!=="color"; $("tabTech").hidden = t.dataset.tab!=="tech"; $("tabStyle").hidden = t.dataset.tab!=="style";
+    $("colorSliders").hidden = t.dataset.tab==="style";
   }));
   $("strength").addEventListener("input", e=>S.strength=+e.target.value);
+  $("scale").addEventListener("input", e=>S.scale=+e.target.value);
+  $("lift").addEventListener("input", e=>S.lift=+e.target.value);
+  S.style = STYLES[0];
+  const sw = $("styles");
+  STYLES.forEach((st,i)=>{
+    const b = document.createElement("button"); b.className="st"; b.setAttribute("aria-pressed", i===0);
+    const cv = document.createElement("canvas");
+    const l = document.createElement("span"); l.className="lbl"; l.textContent=st.name;
+    b.append(cv,l); sw.appendChild(b);
+    setTimeout(()=>drawStyleThumb(cv, st), 60*i);   // build thumbnails gradually, keep the page responsive
+    b.addEventListener("click",()=>{
+      S.style = st; document.querySelectorAll("#styles .st").forEach(x=>x.setAttribute("aria-pressed", x===b));
+      $("styleSliders").hidden = st.id==="none";
+      if(st.id!=="none"){ loadFace(); if(!S.face) badge("ვარცხნილობები იტვირთება…"); }
+    });
+  });
   $("warm").addEventListener("input", e=>S.warm=+e.target.value);
 }
 // a swatch that looks like a lock of hair: light-to-dark with fine strands
@@ -467,7 +756,7 @@ function stopCamera(){ if(S.stream){ S.stream.getTracks().forEach(t=>t.stop()); 
 function sizeTo(w,h){
   const k = Math.min(1, MAX_SIDE/Math.max(w,h));
   S.W = Math.round(w*k); S.H = Math.round(h*k);
-  work.width = view.width = S.W; work.height = view.height = S.H;
+  work.width = view.width = ov.width = S.W; work.height = view.height = ov.height = S.H;
   // show the whole frame: the stage takes the picture's own shape (no cropping = no zoom)
   const ar = Math.max(.56, Math.min(1.34, S.W/S.H));
   $("stage").style.aspectRatio = `${ar}`;
@@ -544,18 +833,22 @@ function updateStats(){
   if(cnt > 20){ S.meanL = S.meanL*.8 + Math.max(.03, sum/cnt/255)*.2; }
   if(top >= 0){ S.top = S.top*.8 + (top/sh)*.2; S.bot = S.bot*.8 + ((bot+1)/sh)*.2; }
 }
+const OVAL = [10,338,297,332,284,251,389,356,454,323,361,288,397,365,379,378,400,377,152,148,176,149,150,136,172,58,132,93,234,127,162,21,54,103,67,109];
 function poseFrom(lm){
   const Pt = i => [lm[i].x*S.W, lm[i].y*S.H];
   const L=Pt(234), R=Pt(454), T=Pt(10), B=Pt(152);
   let ang = Math.atan2(R[1]-L[1], R[0]-L[0]);
   if(ang > Math.PI/2) ang -= Math.PI; else if(ang < -Math.PI/2) ang += Math.PI;
   const c = [(T[0]+B[0])/2, (T[1]+B[1])/2];
-  return {c, ang, rx: Math.hypot(R[0]-L[0], R[1]-L[1])/2, ry: Math.hypot(T[0]-B[0], T[1]-B[1])/2};
+  const s = Math.hypot(R[0]-L[0], R[1]-L[1])/2;
+  return {c, ang, s, rx: s, ry: Math.hypot(T[0]-B[0], T[1]-B[1])/2,
+    fy: -Math.hypot(T[0]-c[0],T[1]-c[1])/s, cy: Math.hypot(B[0]-c[0],B[1]-c[1])/s, oval: OVAL.map(Pt)};
 }
 function smoothPose(prev, n){
   if(!prev) return n;
   const a=.5, L=(p,q)=>p+(q-p)*a;
-  return {c:[L(prev.c[0],n.c[0]), L(prev.c[1],n.c[1])], ang:L(prev.ang,n.ang), rx:L(prev.rx,n.rx), ry:L(prev.ry,n.ry)};
+  return {c:[L(prev.c[0],n.c[0]), L(prev.c[1],n.c[1])], ang:L(prev.ang,n.ang), rx:L(prev.rx,n.rx), ry:L(prev.ry,n.ry),
+    s:L(prev.s,n.s), fy:L(prev.fy,n.fy), cy:L(prev.cy,n.cy), oval:n.oval};
 }
 let missed = 0;
 function loop(){
@@ -571,28 +864,48 @@ function loop(){
   wctx.drawImage(src, 0, 0, S.W, S.H);
   wctx.restore();
 
+  const styleOn = S.style && S.style.id !== "none";
   if(curHex() && S.segmenter){
     S.segmenter.segmentForVideo(work, ts, res=>{
       const m = res.confidenceMasks && res.confidenceMasks[1];
       if(m) updateMask(m.getAsFloat32Array());
     });
     if(S.frame % 3 === 0) updateStats();
-    if(S.face && S.frame % 2 === 0){
-      const r = S.face.detectForVideo(work, ts);
-      if(r.faceLandmarks && r.faceLandmarks.length){ S.pose = smoothPose(S.pose, poseFrom(r.faceLandmarks[0])); missed = 0; }
-      else if(++missed > 6) S.pose = null;
-    }
+  }
+  if(S.face && (styleOn || (curHex() && S.frame % 2 === 0))){
+    const r = S.face.detectForVideo(work, ts);
+    if(r.faceLandmarks && r.faceLandmarks.length){ S.pose = smoothPose(S.pose, poseFrom(r.faceLandmarks[0])); missed = 0; }
+    else if(++missed > 6) S.pose = null;
   }
   render();
+  octx.setTransform(1,0,0,1,0,0); octx.clearRect(0,0,S.W,S.H);
+  if(styleOn && S.pose){
+    if(S.frame % 10 === 0) estimateLight();
+    drawHairstyle(octx, S.style, S.pose, curHex() || "#3B2418", S.tech, S.light);
+    badge("");
+  }
+  const h = $("hint");
+  if(styleOn && S.face && !S.pose){ h.textContent = "სახე კადრში მოაქციეთ"; h.classList.add("on"); }
+  else if(h.textContent === "სახე კადრში მოაქციეთ") h.classList.remove("on");
 }
 
+function estimateLight(){
+  const p = S.pose; if(!p) return;
+  const sw = small.width, sh = small.height;
+  sctx.drawImage(work, 0, 0, sw, sh);
+  const cx = p.c[0]*sw/S.W, cyy = p.c[1]*sh/S.H, r = Math.max(2, p.s*sw/S.W*.45);
+  const d = sctx.getImageData(Math.max(0,cx-r)|0, Math.max(0,cyy-r)|0, Math.max(1,2*r)|0, Math.max(1,2*r)|0).data;
+  let sum=0; for(let i=0;i<d.length;i+=4) sum += .299*d[i]+.587*d[i+1]+.114*d[i+2];
+  const L = sum/(d.length/4)/255;
+  S.light = S.light*.7 + Math.max(.55, Math.min(1.1, L/.55))*.3;
+}
 /* ---------------- capture ---------------- */
 function capture(){
   if(!S.W || !$("start").hidden) return;
   const W = S.W, H = S.H, band = Math.round(W*0.2);
   const c = document.createElement("canvas"); c.width=W; c.height=H+band;
   const x = c.getContext("2d");
-  x.drawImage(view,0,0);
+  x.drawImage(view,0,0); x.drawImage(ov,0,0);
   x.fillStyle="#F4ECDD"; x.fillRect(0,H,W,band);
   x.fillStyle="#B98B3E"; x.fillRect(0,H,W,Math.max(2,Math.round(W/360)));
   const ls = band*0.62/200;
@@ -603,9 +916,10 @@ function capture(){
   x.fillText("ᲚᲐᲚᲘᲡᲗᲐᲜ", tx, H+band*0.5);
   x.fillStyle="#7F5B1B"; x.font = `600 ${Math.round(band*0.12)}px 'Noto Sans Georgian', sans-serif`;
   x.fillText("ᲬᲐᲚᲔᲜᲯᲘᲮᲐ  ·  " + PHONE, tx, H+band*0.76);
-  if(S.color.id !== "none"){
+  const label = [S.style && S.style.id!=="none" ? S.style.name : "", S.color.id!=="none" ? S.color.name + (S.tech ? " · " + TECHS[S.tech].name : "") : ""].filter(Boolean).join(" · ");
+  if(label){
     x.textAlign = "right"; x.fillStyle="#7F5B1B"; x.font = `500 ${Math.round(band*0.11)}px 'Noto Sans Georgian', sans-serif`;
-    x.fillText(S.color.name + (S.tech ? " · " + TECHS[S.tech].name : ""), W - band*0.18, H+band*0.5);
+    x.fillText(label, W - band*0.18, H+band*0.5);
     x.textAlign = "left";
   }
   const url = c.toDataURL("image/jpeg", .92);
