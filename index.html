@@ -385,7 +385,11 @@ function buildUI(){
     const dot = document.createElement("span"); dot.className="dot";
     const l = document.createElement("span"); l.className="lbl"; l.textContent=t.name;
     b.append(dot,l);
-    b.addEventListener("click",()=>{ S.tech=t.id; document.querySelectorAll("#techs .sw").forEach(x=>x.setAttribute("aria-pressed", x===b)); });
+    b.addEventListener("click",()=>{
+      S.tech=t.id; document.querySelectorAll("#techs .sw").forEach(x=>x.setAttribute("aria-pressed", x===b));
+      // a technique needs a shade: pick a light one if the client has not chosen yet
+      if(S.color.id==="none"){ const i = COLORS.findIndex(c=>c.id==="c7"); selectColor(COLORS[i], document.querySelectorAll("#colors .sw")[i]); }
+    });
     tw.appendChild(b);
   });
   paintTechs();
@@ -530,6 +534,10 @@ function updateStats(){
     }
     if(rowHits > Math.max(1, sw*.02)){ if(top<0) top=y; bot=y; }
   }
+  S.noHair = cnt > 20 ? 0 : (S.noHair||0) + 1;
+  const h = $("hint");
+  if(S.noHair > 15){ h.textContent = "თმა კადრში ვერ მოიძებნა — მოაქციეთ თმა კადრში და კარგ განათებაზე"; h.classList.add("on"); }
+  else if(S.noHair === 0 && h.textContent.startsWith("თმა")) h.classList.remove("on");
   if(cnt > 20){ S.meanL = S.meanL*.8 + Math.max(.03, sum/cnt/255)*.2; }
   if(top >= 0){ S.top = S.top*.8 + (top/sh)*.2; S.bot = S.bot*.8 + ((bot+1)/sh)*.2; }
 }
