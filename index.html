@@ -754,6 +754,7 @@ async function startCamera(){
 }
 function stopCamera(){ if(S.stream){ S.stream.getTracks().forEach(t=>t.stop()); S.stream=null; } }
 function sizeTo(w,h){
+  if(!w || !h){ S.W = 0; S.H = 0; return; }
   const k = Math.min(1, MAX_SIDE/Math.max(w,h));
   S.W = Math.round(w*k); S.H = Math.round(h*k);
   work.width = view.width = ov.width = S.W; work.height = view.height = ov.height = S.H;
@@ -853,9 +854,13 @@ function smoothPose(prev, n){
 let missed = 0;
 function loop(){
   requestAnimationFrame(loop);
-  const src = S.source; if(!src || !S.W) return;
-  if(src===video && video.readyState < 2) return;
-  if(src===video && Math.abs(video.videoWidth/video.videoHeight - S.W/S.H) > .01) sizeTo(video.videoWidth, video.videoHeight);
+  const src = S.source; if(!src) return;
+  if(src===video){
+    if(video.readyState < 2 || !video.videoWidth || !video.videoHeight) return;
+    // iOS reports the real frame size only after playback starts, and again after rotation
+    if(!S.W || Math.abs(video.videoWidth/video.videoHeight - S.W/S.H) > .01) sizeTo(video.videoWidth, video.videoHeight);
+  }
+  if(!S.W) return;
   let ts = performance.now(); if(ts <= S.lastTs) ts = S.lastTs + 1; S.lastTs = ts;
   S.frame++;
 
