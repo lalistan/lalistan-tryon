@@ -31,7 +31,7 @@ main{flex:1;display:flex;flex-direction:column;max-width:560px;width:100%;margin
 
 /* stage */
 .stage{position:relative;background:var(--ink);aspect-ratio:3/4;width:100%;overflow:hidden}
-.stage canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.stage canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:var(--ink)}
 .stage .badge{position:absolute;left:12px;top:12px;background:rgba(31,26,23,.62);color:var(--cream);font-size:12px;padding:6px 10px;border-radius:999px;display:none}
 .stage .badge.on{display:block}
 .cmp{position:absolute;right:12px;top:12px;background:rgba(31,26,23,.62);color:var(--cream);font-size:12px;font-weight:600;padding:7px 12px;border-radius:999px;z-index:2}
@@ -429,7 +429,7 @@ $("btnCmp").addEventListener("click", ()=>{
 function stageToTex(clientX){
   const r = view.getBoundingClientRect(), ca = S.W/S.H, ra = r.width/r.height;
   let x = (clientX - r.left)/r.width;
-  if(ca > ra){ const vis = ra/ca; x = (1-vis)/2 + x*vis; }   // object-fit: cover crops the sides
+  if(ca < ra){ const vis = ca/ra; x = (x - (1-vis)/2)/vis; }   // object-fit: contain letterboxes the sides
   return Math.min(.98, Math.max(.02, x));
 }
 let dragging = false;
@@ -458,7 +458,7 @@ function loadFace(){
 /* ---------------- camera / photo ---------------- */
 async function startCamera(){
   stopCamera();
-  const s = await navigator.mediaDevices.getUserMedia({audio:false, video:{facingMode:S.facing, width:{ideal:720}, height:{ideal:960}}});
+  const s = await navigator.mediaDevices.getUserMedia({audio:false, video:{facingMode:S.facing, width:{ideal:640}, height:{ideal:480}, aspectRatio:{ideal:4/3}}});
   S.stream = s; video.srcObject = s; await video.play();
   S.source = video; S.mirror = S.facing==="user";
   sizeTo(video.videoWidth, video.videoHeight);
@@ -468,6 +468,9 @@ function sizeTo(w,h){
   const k = Math.min(1, MAX_SIDE/Math.max(w,h));
   S.W = Math.round(w*k); S.H = Math.round(h*k);
   work.width = view.width = S.W; work.height = view.height = S.H;
+  // show the whole frame: the stage takes the picture's own shape (no cropping = no zoom)
+  const ar = Math.max(.56, Math.min(1.34, S.W/S.H));
+  $("stage").style.aspectRatio = `${ar}`;
   small.width = Math.max(1, Math.round(S.W/8)); small.height = Math.max(1, Math.round(S.H/8));
   S.mask = null; S.pose = null;
 }
